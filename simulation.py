@@ -904,46 +904,16 @@ class Simulation_ign(object):
             pressures = table.col("pressure")
             mass_fractions = table.col("mass_fractions")
 
-        # temperature_initial = temperatures[0]
-        # temperature_max = temperatures[len(temperatures) - 1]
-        # temperature_diff = temperature_max - temperature_initial
-        #
-        # sampled_data = np.zeros((len(deltas), 2 + mass_fractions.shape[1]))
-        #
-        # # need to add processing to get the 20 data points here
-        # self.ignition_delay = 0.0
-        # ignition_flag = False
-        # idx = 0
-        # for time, temp, pres, mass in zip(times, temperatures, pressures, mass_fractions):
-        #     if temp >= temperature_initial + 400.0 and not ignition_flag:
-        #         self.ignition_delay = time
-        #         ignition_flag = True
-        #         if skip_data:
-        #             return self.ignition_delay
-        #
-        #     if temp >= temperature_initial + (deltas[idx] * temperature_diff):
-        #         sampled_data[idx, 0:2] = [temp, pres]
-        #         sampled_data[idx, 2:] = mass
-        #
-        #         idx += 1
-        #         if idx == 20:
-        #             self.sampled_data = sampled_data
-        #             return self.ignition_delay, sampled_data
-
         # change from sampling thermal runaway to radical explosion (modified by Kevin D. on 2024/4/4)
         temperature_initial = temperatures[0]
-        sampled_data = np.zeros((len(deltas), 2 + mass_fractions.shape[1]))
+
+        arg = np.argmin(np.abs(temperatures - (temperature_initial + 400.0)))
+        self.ignition_delay = times[arg]
+        if skip_data:
+            return self.ignition_delay
 
         # need to add processing to get the 20 data points here
-        self.ignition_delay = 0.0
-        ignition_flag = False
-        for time, temp, pres, mass in zip(times, temperatures, pressures, mass_fractions):
-            if temp >= temperature_initial + 400.0 and not ignition_flag:
-                self.ignition_delay = time
-                ignition_flag = True
-                if skip_data:
-                    return self.ignition_delay
-
+        sampled_data = np.zeros((len(deltas), 2 + mass_fractions.shape[1]))
         idx = 0
         for time, temp, pres, mass in zip(times, temperatures, pressures, mass_fractions):
             if time >= deltas[idx] * self.ignition_delay:

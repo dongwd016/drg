@@ -279,7 +279,7 @@ def run_drg(
         matrices.append(create_drg_matrix((state[0], state[1], state[2:]), solution))
 
     # begin reduction iterations
-    logging.info("Beginning DRG reduction loop edited by Yue")
+    logging.info("Beginning DRG reduction loop")
     logging.info(45 * "-")
     logging.info("Threshold | Number of species | Max error (%)")
 
