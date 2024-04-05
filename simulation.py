@@ -635,7 +635,7 @@ class Simulation_znd(object):
 
         temperatures = saved_dict["temperature"]
         pressures = saved_dict["pressure"]
-        mass_fractions = saved_dict["mass_fractions"]
+        mass_fractions = saved_dict["mass_fractions"].T
         induction_length = saved_dict["induction_length"]
 
         temperature_initial = temperatures[0]

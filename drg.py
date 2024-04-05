@@ -112,20 +112,20 @@ def trim_drg(matrix, species_names, species_targets, threshold):
 
 
 def reduce_drg(
-    model_file,
-    species_targets,
-    species_safe,
-    threshold,
-    matrices,
-    ignition_conditions,
-    flame_conditions,
-    znd_conditions,
-    sampled_metrics,
-    phase_name="",
-    previous_model=None,
-    threshold_upper=None,
-    num_threads=1,
-    path="",
+        model_file,
+        species_targets,
+        species_safe,
+        threshold,
+        matrices,
+        ignition_conditions,
+        flame_conditions,
+        znd_conditions,
+        sampled_metrics,
+        phase_name="",
+        previous_model=None,
+        threshold_upper=None,
+        num_threads=1,
+        path="",
 ):
     """Given a threshold and DRG matrix, reduce the model and determine the error.
 
@@ -197,18 +197,18 @@ def reduce_drg(
 
 
 def run_drg(
-    model_file,
-    ignition_conditions,
-    psr_conditions,
-    flame_conditions,
-    znd_conditions,
-    error_limit,
-    species_targets,
-    species_safe,
-    phase_name="",
-    threshold_upper=None,
-    num_threads=1,
-    path="",
+        model_file,
+        ignition_conditions,
+        psr_conditions,
+        flame_conditions,
+        znd_conditions,
+        error_limit,
+        species_targets,
+        species_safe,
+        phase_name="",
+        threshold_upper=None,
+        num_threads=1,
+        path="",
 ):
     """Main function for running DRG reduction.
 
@@ -246,9 +246,11 @@ def run_drg(
         Return reduced model and associated metadata
 
     """
+    if not os.path.isdir(path):
+        os.makedirs(path)
+
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-
     handlers = [logging.FileHandler("{}/info.log".format(path)), logging.StreamHandler()]
     logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=handlers)
 
