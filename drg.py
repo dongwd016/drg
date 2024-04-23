@@ -112,20 +112,21 @@ def trim_drg(matrix, species_names, species_targets, threshold):
 
 
 def reduce_drg(
-    model_file,
-    species_targets,
-    species_safe,
-    threshold,
-    matrices,
-    ignition_conditions,
-    flame_conditions,
-    znd_conditions,
-    sampled_metrics,
-    phase_name="",
-    previous_model=None,
-    threshold_upper=None,
-    num_threads=1,
-    path="",
+        model_file,
+        species_targets,
+        species_safe,
+        threshold,
+        matrices,
+        ignition_conditions,
+        psr_conditions,
+        flame_conditions,
+        znd_conditions,
+        sampled_metrics,
+        phase_name="",
+        previous_model=None,
+        threshold_upper=None,
+        num_threads=1,
+        path="",
 ):
     """Given a threshold and DRG matrix, reduce the model and determine the error.
 
@@ -142,6 +143,12 @@ def reduce_drg(
     matrices : list of numpy.ndarray
         List of DRG adjacency matrices determined from thermochemical state data
     ignition_conditions : list of InputIgnition
+        List of autoignition initial conditions.
+    psr_conditions : list of InputPsr
+        List of autoignition initial conditions.
+    flame_conditions : list of InputFlame
+        List of autoignition initial conditions.
+    znd_conditions : list of InputZnd
         List of autoignition initial conditions.
     sampled_metrics: numpy.ndarray
         Global metrics from original model used to evaluate error
@@ -187,6 +194,7 @@ def reduce_drg(
     reduced_model_metrics = sample_metrics(
         reduced_model_filename,
         ignition_conditions,
+        psr_conditions,
         flame_conditions,
         znd_conditions,
         phase_name=phase_name,
@@ -205,18 +213,18 @@ def reduce_drg(
 
 
 def run_drg(
-    model_file,
-    ignition_conditions,
-    psr_conditions,
-    flame_conditions,
-    znd_conditions,
-    error_limit,
-    species_targets,
-    species_safe,
-    phase_name="",
-    threshold_upper=None,
-    num_threads=1,
-    path="",
+        model_file,
+        ignition_conditions,
+        psr_conditions,
+        flame_conditions,
+        znd_conditions,
+        error_limit,
+        species_targets,
+        species_safe,
+        phase_name="",
+        threshold_upper=None,
+        num_threads=1,
+        path="",
 ):
     """Main function for running DRG reduction.
 
@@ -302,14 +310,9 @@ def run_drg(
     logging.info(45 * "-")
     logging.info("Threshold | Number of species | Max error (%)")
 
-    # print("Beginning DRG reduction loop edited by Yue")
-    # print(45 * "-")
-    # print("Threshold | Number of species | Max error (%)")
-    # start with detailed (starting) model
     previous_model = ReducedModel(model=solution, filename=model_file, error=0.0)
 
     first = True
-    # error_current = 0.0
     threshold = 0.01
     threshold_increment = 0.01
 
@@ -326,6 +329,7 @@ def run_drg(
             threshold,
             matrices,
             ignition_conditions,
+            psr_conditions,
             flame_conditions,
             znd_conditions,
             sampled_metrics,
@@ -339,11 +343,6 @@ def run_drg(
         num_species = reduced_model.model.n_species
 
         logging.info(f"{threshold:^9.2e} | {num_species:^17} | {error_current:^.2f}")
-        # print(f"{threshold:^9.2e} | {num_species:^17} | {error_current:^.2f}")
-
-        # cleanup files
-        # if previous_model.model.n_species != reduced_model.model.n_species:
-        #     os.remove(reduced_model.filename)
 
         previous_model = ReducedModel(
             model=reduced_model.model, filename=reduced_model.filename, error=reduced_model.error, limbo_species=reduced_model.limbo_species
@@ -368,6 +367,7 @@ def run_drg(
                     threshold,
                     matrices,
                     ignition_conditions,
+                    psr_conditions,
                     flame_conditions,
                     znd_conditions,
                     sampled_metrics,
@@ -380,80 +380,10 @@ def run_drg(
         else:
             first = False
 
-    # while error_current <= error_limit:
-    #     reduced_model = reduce_drg(
-    #         model_file,
-    #         species_targets,
-    #         species_safe,
-    #         threshold,
-    #         matrices,
-    #         ignition_conditions,
-    #         flame_conditions,
-    #         znd_conditions,
-    #         sampled_metrics,
-    #         phase_name=phase_name,
-    #         previous_model=previous_model,
-    #         threshold_upper=threshold_upper,
-    #         num_threads=num_threads,
-    #         path=path,
-    #     )
-    #     error_current = reduced_model.error
-    #     num_species = reduced_model.model.n_species
-
-    #     # reduce threshold if past error limit on first iteration
-    #     if first and error_current > error_limit:
-    #         error_current = 0.0
-    #         threshold /= 10
-    #         threshold_increment /= 10
-    #         if threshold <= 1e-5:
-    #             raise SystemExit("Threshold value dropped below 1e-5 without producing viable reduced model")
-    #         logging.info("Threshold value too high, reducing by factor of 10")
-    #         # print("Threshold value too high, reducing by factor of 10")
-    #         continue
-
-    #     logging.info(f"{threshold:^9.2e} | {num_species:^17} | {error_current:^.2f}")
-    #     # print(f"{threshold:^9.2e} | {num_species:^17} | {error_current:^.2f}")
-
-    #     # tmp_path = "{}/tmp".format(path)
-    #     # if not os.path.isdir(tmp_path):
-    #     #     os.makedirs(tmp_path)
-    #     # soln2cti.write(reduced_model, f"reduced_{reduced_model.model.n_species}.cti", path=tmp_path)
-
-    #     threshold += threshold_increment
-    #     first = False
-
-    #     # cleanup files
-    #     if previous_model.model.n_species != reduced_model.model.n_species:
-    #         os.remove(reduced_model.filename)
-
-    #     previous_model = ReducedModel(model=reduced_model.model, filename=reduced_model.filename, error=reduced_model.error, limbo_species=reduced_model.limbo_species)
-
-    # threshold -= 2 * threshold_increment
-    # reduced_model = reduce_drg(
-    #     model_file,
-    #     species_targets,
-    #     species_safe,
-    #     threshold,
-    #     matrices,
-    #     ignition_conditions,
-    #     flame_conditions,
-    #     znd_conditions,
-    #     sampled_metrics,
-    #     phase_name=phase_name,
-    #     threshold_upper=threshold_upper,
-    #     num_threads=num_threads,
-    #     path=path,
-    # )
-
     logging.info(45 * "-")
     logging.info("DRG reduction complete.")
     logging.info(f"Skeletal model: {reduced_model.model.n_species} species and " f"{reduced_model.model.n_reactions} reactions.")
     logging.info(f"Maximum error: {reduced_model.error:.2f}%")
     logging.info("Final reduced model saved as " + reduced_model.filename)
 
-    # print(45 * "-")
-    # print("DRG reduction complete.")
-    # print(f"Skeletal model: {reduced_model.model.n_species} species and " f"{reduced_model.model.n_reactions} reactions.")
-    # print(f"Maximum error: {reduced_model.error:.2f}%")
-    # print("Final reduced model saved as " + reduced_model.filename)
     return reduced_model

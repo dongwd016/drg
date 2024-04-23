@@ -286,8 +286,8 @@ class Simulation_znd(object):
 
         solution_dict = dict()
         solution_dict["distance"] = znd_out["distance"]
-        solution_dict["temperature"] = znd_out["T"]
-        solution_dict["pressure"] = znd_out["P"]
+        solution_dict["temperatures"] = znd_out["T"]
+        solution_dict["pressures"] = znd_out["P"]
         solution_dict["mass_fractions"] = znd_out["species"]
         solution_dict["induction_length"] = znd_out["ind_len_ZND"]
         json.dump(solution_dict, open(self.save_file, "w"), default=json_convert)
@@ -319,14 +319,14 @@ class Simulation_znd(object):
         saved_dict = json.load(open(self.save_file, "r"), object_hook=json_deconvert)
 
         distance = saved_dict["distance"]
-        temperatures = saved_dict["temperature"]
-        pressures = saved_dict["pressure"]
-        mass_fractions = saved_dict["mass_fractions"]
+        temperatures = saved_dict["temperatures"]
+        pressures = saved_dict["pressures"]
+        mass_fractions = saved_dict["mass_fractions"].T
         induction_length = saved_dict["induction_length"]
 
         sampled_x = np.linspace(0, induction_length, 22)[1:-1]
         ind_list = [np.argmin(np.abs(distance - x)) for x in sampled_x]
-        sampled_data = np.array([temperatures[ind_list], pressures[ind_list], mass_fractions[:, ind_list]]).T
+        sampled_data = np.hstack([temperatures[ind_list].reshape(-1, 1), pressures[ind_list].reshape(-1, 1), mass_fractions[ind_list, :]])
         return induction_length, sampled_data
 
     def clean(self):
@@ -361,22 +361,124 @@ class Simulation_psr(object):
         self.model = model
         self.phase_name = phase_name
         self.path = path
-        self.save_file = os.path.join(self.path, str(self.idx) + "_znd.json")
+        self.save_file = os.path.join(self.path, str(self.idx) + "_psr.json")
 
     def setup_case(self):
-        """Initialize simulation case."""
-        self.gas = ct.Solution(self.model, self.phase_name)
-        self.gas.TP = (self.properties.temperature, self.properties.pressure * ct.one_atm)
+        pass
+
+    def initialize_gas(self):
+        gas = ct.Solution(self.model, self.phase_name)
+        gas.TP = (self.properties.temperature, self.properties.pressure * ct.one_atm)
         # set initial composition using either equivalence ratio or general reactant composition
         if self.properties.equivalence_ratio:
-            self.gas.set_equivalence_ratio(self.properties.equivalence_ratio, self.properties.fuel, self.properties.oxidizer)
+            gas.set_equivalence_ratio(self.properties.equivalence_ratio, self.properties.fuel, self.properties.oxidizer)
         else:
             if self.properties.composition_type == "mole":
-                self.gas.TPX = (self.properties.temperature, self.properties.pressure * ct.one_atm, self.properties.reactants)
+                gas.TPX = (self.properties.temperature, self.properties.pressure * ct.one_atm, self.properties.reactants)
             else:
-                self.gas.TPY = (self.properties.temperature, self.properties.pressure * ct.one_atm, self.properties.reactants)
+                gas.TPY = (self.properties.temperature, self.properties.pressure * ct.one_atm, self.properties.reactants)
+        return gas
 
-    def run_case(self, restart=False):
+    def get_psr_states(self, num=10):
+        tres_range = [1e-6, 1e0]
+        gas = self.initialize_gas()
+        inlet = ct.Reservoir(gas)
+        gas.equilibrate("HP")
+
+        combustor = ct.IdealGasReactor(gas, volume=1.0)
+        exhaust = ct.Reservoir(gas)
+        inlet_mfc = ct.MassFlowController(inlet, combustor, mdot=lambda t: combustor.mass / residence_time)
+        outlet_mfc = ct.PressureController(combustor, exhaust, master=inlet_mfc, K=0.01)
+
+        sim = ct.ReactorNet([combustor])
+        T_arr = []
+        tres_arr = 10 ** np.linspace(np.log10(tres_range[1]), np.log10(tres_range[0]), 100)
+        for residence_time in tres_arr:
+            sim.set_initial_time(0.0)
+            sim.advance_to_steady_state()
+            T_arr.append(combustor.thermo.T)
+        T_arr = np.array(T_arr)
+        temp_grad = np.diff(T_arr) / np.diff(tres_arr)
+        up_turn_arg = np.argmax(np.abs(temp_grad))
+        up_turn_temp = T_arr[up_turn_arg]
+        up_turn_tres = tres_arr[up_turn_arg]
+
+        gas = self.initialize_gas()
+        gas.equilibrate("HP")
+        combustor.insert(gas)
+        states = ct.SolutionArray(gas, extra=["tres"])
+        tres_arr = 10 ** np.linspace(np.log10(tres_range[1]), np.log10(up_turn_tres * 1.1), num)
+        for residence_time in tres_arr:
+            sim.set_initial_time(0.0)
+            sim.advance_to_steady_state()
+            states.append(combustor.thermo.state, tres=residence_time)
+
+        Y = gas.Y.copy()
+        tau = tres_arr[-1]
+        initial_psi = np.concatenate([Y, [tau]])
+        temp_mid = np.linspace(up_turn_temp, 1000, num + 1)[1:]
+        states = self.get_middle_branch(initial_psi, temp_mid, states)
+
+        return states
+
+    def get_extinction_time(self, states):
+        arg = np.argmin(states.tres)
+        temp_mid = np.linspace(states.T[arg - 1], states.T[arg + 1], 100)
+        initial_psi = np.concatenate([states.Y[arg - 1], [states.tres[arg - 1]]])
+        local_states = ct.SolutionArray(self.initialize_gas(), extra=["tres"])
+        local_states = self.get_middle_branch(initial_psi, temp_mid, local_states)
+        extinction_time = np.min(local_states.tres)
+        return extinction_time
+
+    def get_middle_branch(self, initial_psi, temp_mid, states):
+        gas = self.initialize_gas()
+        gas0 = self.initialize_gas()
+        h0 = gas0.enthalpy_mass
+        V = 1.0
+        pres = self.properties.pressure
+        psi = initial_psi.copy()
+
+        for cur_temp in temp_mid:
+            h_arr = np.array([gas.species(i).thermo.h(cur_temp) for i in range(gas.n_species)]) / gas.molecular_weights
+            gas.TP = cur_temp, pres * ct.one_atm
+            while True:
+                wy = np.zeros((gas.n_species, gas.n_species))
+                cur_Y = psi[:-1].copy()
+                cur_tau = psi[-1]
+                for i in range(gas.n_species):
+                    delta = 1e-5 * np.abs(cur_Y[i]) + 1e-8
+
+                    pert_Y = cur_Y.copy()
+                    pert_Y[i] = cur_Y[i] + delta
+                    gas.Y = pert_Y
+                    w_up = gas.net_production_rates.copy()
+
+                    pert_Y = cur_Y.copy()
+                    pert_Y[i] = cur_Y[i] - delta
+                    gas.Y = pert_Y
+                    w_low = gas.net_production_rates.copy()
+
+                    wy[:, i] = (w_up - w_low) / (2 * delta)
+                gas.Y = cur_Y
+                m = gas.density_mass
+
+                J = np.zeros((gas.n_species + 1, gas.n_species + 1))
+                J[: gas.n_species, : gas.n_species] = gas.molecular_weights.reshape(-1, 1) * V * wy - m / cur_tau * np.eye(gas.n_species)
+                J[-1, :-1] = h_arr
+                J[:-1, -1] = -(gas0.Y - gas.Y) * m / cur_tau ** 2
+
+                F = np.zeros(gas.n_species + 1)
+                F[:-1] = gas.net_production_rates * gas.molecular_weights * V + m / cur_tau * (gas0.Y - cur_Y)
+                F[-1] = gas.enthalpy_mass - h0
+                psi_new = psi - 0.3 * np.linalg.solve(J, F)
+                err = np.abs((psi_new[-1] - psi[-1]) / psi[-1])
+                psi = psi_new.copy()
+                if err < 1e-3:
+                    states.append(TPY=(cur_temp, pres * ct.one_atm, psi[:-1]), tres=psi[-1])
+                    break
+        return states
+
+    def run_case(self, restart=False, num=10):
         """Run simulation case set up ``setup_case``.
 
         If no end time is specified for the integration, the function integrates
@@ -401,25 +503,25 @@ class Simulation_psr(object):
             print("Skipped existing case ", self.idx)
             return
 
-        znd_out = zndsolve(self.gas_post, self.gas_pre, self.cj_speed, t_end=1e-5, advanced_output=True)
-
-        self.induction_length = znd_out["ind_len_ZND"]
+        states = self.get_psr_states(num=num)
+        self.extinction_time = self.get_extinction_time(states)
 
         solution_dict = dict()
-        solution_dict["temperature"] = znd_out["T"]
-        solution_dict["pressure"] = znd_out["P"]
-        solution_dict["mass_fractions"] = znd_out["species"]
-        solution_dict["induction_length"] = znd_out["ind_len_ZND"]
+        solution_dict["residence_time"] = states.tres
+        solution_dict["temperatures"] = states.T
+        solution_dict["pressures"] = states.P
+        solution_dict["mass_fractions"] = states.X
+        solution_dict["extinction_time"] = self.extinction_time
         json.dump(solution_dict, open(self.save_file, "w"), default=json_convert)
 
-        return self.induction_length
+        return self.extinction_time
 
     def calculate_extinctiontime(self):
-        """Run simulation case set up ``setup_case``, just for ignition delay."""
+        """Run simulation case set up ``setup_case``."""
 
-        znd_out = zndsolve(self.gas_post, self.gas_pre, self.cj_speed, t_end=1e-5, advanced_output=True)
-        self.induction_length = znd_out["ind_len_ZND"]
-        return self.induction_length
+        states = self.get_psr_states()
+        self.extinction_time = self.get_extinction_time(states)
+        return self.extinction_time
 
     def process_results(self):
         """Process integration results to sample data
@@ -429,38 +531,45 @@ class Simulation_psr(object):
 
         Returns
         -------
-        tuple of float, numpy.ndarray or float
-            Ignition delay, or ignition delay and sampled data
+        tuple of float, numpy.ndarray
+            Extinction time and sampled data
 
         """
-        delta = 0.05
-        deltas = np.arange(delta, 1 + delta, delta)
-
         # Load saved integration results
         saved_dict = json.load(open(self.save_file, "r"), object_hook=json_deconvert)
 
-        temperatures = saved_dict["temperature"]
-        pressures = saved_dict["pressure"]
-        mass_fractions = saved_dict["mass_fractions"].T
-        induction_length = saved_dict["induction_length"]
+        temperatures = saved_dict["temperatures"]
+        pressures = saved_dict["pressures"]
+        mass_fractions = saved_dict["mass_fractions"]
+        extinction_time = saved_dict["extinction_time"]
 
-        temperature_initial = temperatures[0]
-        temperature_max = temperatures[len(temperatures) - 1]
-        temperature_diff = temperature_max - temperature_initial
+        sampled_data = np.hstack([temperatures.reshape(-1, 1), pressures.reshape(-1, 1), mass_fractions])
 
-        sampled_data = np.zeros((len(deltas), 2 + mass_fractions.shape[1]))
+        return extinction_time, sampled_data
 
-        idx = 0
-        for temp, pres, mass in zip(temperatures, pressures, mass_fractions):
-            if temp >= temperature_initial + (deltas[idx] * temperature_diff):
-                sampled_data[idx, 0:2] = [temp, pres]
-                sampled_data[idx, 2:] = mass
-                idx += 1
-                if idx == 20:
-                    # self.sampled_data = sampled_data
-                    break
-                    # return induction_length, sampled_data
-        return induction_length, sampled_data
+    def get_plot_data(self):
+        """Process integration results to sample data
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        numpy.ndarray
+            sampled data
+
+        """
+        # Load saved integration results
+        saved_dict = json.load(open(self.save_file, "r"), object_hook=json_deconvert)
+
+        residence_time = saved_dict['residence_time']
+        temperatures = saved_dict["temperatures"]
+        pressures = saved_dict["pressures"]
+        mass_fractions = saved_dict["mass_fractions"]
+
+        sampled_data = np.hstack([residence_time.reshape(-1, 1), temperatures.reshape(-1, 1), pressures.reshape(-1, 1), mass_fractions])
+
+        return sampled_data
 
     def clean(self):
         """Delete file with full integration data."""
