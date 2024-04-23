@@ -63,9 +63,18 @@ class InputLaminarFlame(NamedTuple):
 class InputPSR(NamedTuple):
     """Holds input parameters for single PSR simulation."""
 
+    temperature: float
+    pressure: float
+
+    equivalence_ratio: float = 0.0
+    fuel: Dict = {}
+    oxidizer: Dict = {}
+    reactants: Dict = {}
+    composition_type: str = "mole"
+
 
 class InputZND(NamedTuple):
-    """Holds input parameters for single PSR simulation."""
+    """Holds input parameters for single ZND simulation."""
 
     temperature: float
     pressure: float
@@ -86,14 +95,13 @@ class InputZND(NamedTuple):
 #### Codes to handle multiprocessing of different types of targets ##########
 
 
-def simulation_worker_ign(sim_tuple):
+def simulation_worker_ign(sim):
     """Worker for multiprocessing of simulation cases.
 
     Parameters
     ----------
-    sim_tuple : tuple
-        Contains Simulation object and other parameters needed to setup
-        and run case.
+    sim : Simulation_ign
+        Simulation object to be run
 
     Returns
     -------
@@ -101,23 +109,20 @@ def simulation_worker_ign(sim_tuple):
         Object with simulation metadata
 
     """
-    sim, stop_at_ignition = sim_tuple
-
     sim.setup_case()
-    sim.run_case(stop_at_ignition)
+    sim.run_case()
 
     sim = simulation.Simulation_ign(sim.idx, sim.properties, sim.model, phase_name=sim.phase_name, path=sim.path)
     return sim
 
 
-def simulation_worker_fls(sim_tuple):
+def simulation_worker_fls(sim):
     """Worker for multiprocessing of simulation cases.
 
     Parameters
     ----------
-    sim_tuple : tuple
-        Contains Simulation object and other parameters needed to setup
-        and run case.
+    sim : Simulation_fls
+        Simulation object to be run
 
     Returns
     -------
@@ -125,23 +130,20 @@ def simulation_worker_fls(sim_tuple):
         Object with simulation metadata
 
     """
-    sim, stop_at_flame = sim_tuple
-
     sim.setup_case()
-    sim.run_case(stop_at_flame)
+    sim.run_case()
 
     sim = simulation.Simulation_fls(sim.idx, sim.properties, sim.model, phase_name=sim.phase_name, path=sim.path)
     return sim
 
 
-def simulation_worker_znd(sim_tuple):
+def simulation_worker_znd(sim):
     """Worker for multiprocessing of simulation cases.
 
     Parameters
     ----------
-    sim_tuple : tuple
-        Contains Simulation object and other parameters needed to setup
-        and run case.
+    sim : Simulation_znd
+        Simulation object to be run
 
     Returns
     -------
@@ -149,22 +151,41 @@ def simulation_worker_znd(sim_tuple):
         Object with simulation metadata
 
     """
-    sim, stop_at_flame = sim_tuple
-
     sim.setup_case()
-    sim.run_case(stop_at_flame)
+    sim.run_case()
 
     sim = simulation.Simulation_znd(sim.idx, sim.properties, sim.model, phase_name=sim.phase_name, path=sim.path)
     return sim
 
 
-def ignition_worker(sim_tuple):
+def simulation_worker_psr(sim):
+    """Worker for multiprocessing of simulation cases.
+
+    Parameters
+    ----------
+    sim : Simulation_psr
+        Simulation object to be run
+
+    Returns
+    -------
+    sim : Simulation
+        Object with simulation metadata
+
+    """
+    sim.setup_case()
+    sim.run_case()
+
+    sim = simulation.Simulation_znd(sim.idx, sim.properties, sim.model, phase_name=sim.phase_name, path=sim.path)
+    return sim
+
+
+def ignition_worker(sim):
     """Worker for multiprocessing of ignition delay only cases.
 
     Parameters
     ----------
-    sim_tuple : tuple
-        Tuple of Simulation object to be run and identifier
+    sim : Simulation_ign
+        Simulation object to be run
 
     Returns
     -------
@@ -172,50 +193,66 @@ def ignition_worker(sim_tuple):
         Case identifier and calculated ignition delay
 
     """
-    sim, idx = sim_tuple
     sim.setup_case()
     ignition_delay = sim.calculate_ignition()
-    return {idx: ignition_delay}
+    return {sim.idx: ignition_delay}
 
 
-def flame_worker(sim_tuple):
+def flame_worker(sim):
     """Worker for multiprocessing of ignition delay only cases.
 
     Parameters
     ----------
-    sim_tuple : tuple
-        Tuple of Simulation object to be run and identifier
+    sim : Simulation_fls
+        Simulation object to be run
 
     Returns
     -------
     dict
-        Case identifier and calculated ignition delay
+        Case identifier and calculated flame speed
 
     """
-    sim, idx = sim_tuple
     sim.setup_case()
     flame_speed = sim.calculate_flamespeed()
-    return {idx: flame_speed}
+    return {sim.idx: flame_speed}
 
 
-def znd_worker(sim_tuple):
+def znd_worker(sim):
     """Worker for multiprocessing of ignition delay only cases.
 
     Parameters
     ----------
-    sim_tuple : tuple
-        Tuple of Simulation object to be run and identifier
+    sim : Simulation_znd
+        Simulation object to be run
 
     Returns
     -------
     dict
-        Case identifier and calculated ignition delay
+        Case identifier and calculated induction length
 
     """
-    sim, idx = sim_tuple
     sim.setup_case()
     induction_length = sim.calculate_inductionlength()
-    return {idx: induction_length}
+    return {sim.idx: induction_length}
+
+
+def psr_worker(sim):
+    """Worker for multiprocessing of ignition delay only cases.
+
+    Parameters
+    ----------
+    sim : Simulation_psr
+        Simulation object to be run
+
+    Returns
+    -------
+    dict
+        Case identifier and calculated extinction residence time
+
+    """
+    sim.setup_case()
+    extinction_time = sim.calculate_extinctiontime()
+    return {sim.idx: extinction_time}
 
 
 #############################################################################
@@ -293,7 +330,17 @@ def read_metrics(ignition_conditions, flame_conditions, znd_conditions, psr_cond
     return np.concatenate((ignition_delays, flame_speeds, induction_lengths))
 
 
-def sample_metrics(model, ignition_conditions, flame_conditions, znd_conditions, psr_conditions=[], phase_name="", num_threads=1, path="", reuse_saved=False):
+def sample_metrics(
+    model,
+    ignition_conditions,
+    flame_conditions,
+    znd_conditions,
+    psr_conditions=[],
+    phase_name="",
+    num_threads=1,
+    path="",
+    reuse_saved=False,
+):
     """Evaluates metrics used for determining error of reduced model
 
     Initially, supports autoignition delay only.
@@ -343,7 +390,7 @@ def sample_metrics(model, ignition_conditions, flame_conditions, znd_conditions,
         else:
             simulations = []
             for idx, case in enumerate(ignition_conditions):
-                simulations.append([simulation.Simulation_ign(idx, case, model, phase_name=phase_name, path=path), idx])
+                simulations.append(simulation.Simulation_ign(idx, case, model, phase_name=phase_name, path=path))
 
             jobs = tuple(simulations)
             if num_threads == 1:
@@ -376,7 +423,7 @@ def sample_metrics(model, ignition_conditions, flame_conditions, znd_conditions,
         else:
             simulations = []
             for idx, case in enumerate(flame_conditions):
-                simulations.append([simulation.Simulation_fls(idx, case, model, phase_name=phase_name, path=path), idx])
+                simulations.append(simulation.Simulation_fls(idx, case, model, phase_name=phase_name, path=path))
 
             jobs = tuple(simulations)
             if num_threads == 1:
@@ -406,7 +453,7 @@ def sample_metrics(model, ignition_conditions, flame_conditions, znd_conditions,
         else:
             simulations = []
             for idx, case in enumerate(znd_conditions):
-                simulations.append([simulation.Simulation_znd(idx, case, model, phase_name=phase_name, path=path), idx])
+                simulations.append(simulation.Simulation_znd(idx, case, model, phase_name=phase_name, path=path))
 
             jobs = tuple(simulations)
             if num_threads == 1:
@@ -434,7 +481,7 @@ def sample_metrics(model, ignition_conditions, flame_conditions, znd_conditions,
     return np.concatenate(data_list, axis=0)
 
 
-def sample(model, ignition_conditions, flame_conditions, znd_conditions, psr_conditions=False, phase_name="", num_threads=1, path=""):
+def sample(model, ignition_conditions, psr_conditions, flame_conditions, znd_conditions, phase_name="", num_threads=1, path=""):
     """Samples thermochemical data and generates metrics for various phenomena.
 
     Initially, supports autoignition delay only.
@@ -445,10 +492,12 @@ def sample(model, ignition_conditions, flame_conditions, znd_conditions, psr_con
         Filename for Cantera model for performing simulations
     ignition_conditions : list of InputIgnition
         List of autoignition initial conditions.
-    psr_conditions : list of InputPSR, optional
+    psr_conditions : list of InputPSR
         List of PSR simulation conditions.
-    flame_conditions : list of InputLaminarFlame, optional
+    flame_conditions : list of InputLaminarFlame
         List of laminar flame simulation conditions.
+    znd_conditions : list of InputZND
+        List of ZND simulation conditions.
     phase_name : str, optional
         Optional name for phase to load from CTI file (e.g., 'gas').
     num_threads : int
@@ -498,10 +547,9 @@ def sample(model, ignition_conditions, flame_conditions, znd_conditions, psr_con
         else:
             logging.info("Running autoignition simulations for starting model.")
             # print("Running autoignition simulations for starting model.")
-            stop_at_ignition = False
             simulations = []
             for idx, case in enumerate(ignition_conditions):
-                simulations.append([simulation.Simulation_ign(idx, case, model, phase_name=phase_name, path=path), stop_at_ignition])
+                simulations.append(simulation.Simulation_ign(idx, case, model, phase_name=phase_name, path=path))
 
             jobs = tuple(simulations)
             if num_threads == 1:
@@ -526,7 +574,55 @@ def sample(model, ignition_conditions, flame_conditions, znd_conditions, psr_con
             np.savetxt(data_files["output_ignition"], ignition_delays, delimiter=",")
 
     if psr_conditions:
-        raise NotImplementedError("PSR calculations not currently supported.")
+        logging.info("Sampling psr calculation targets")
+        induction_lengths = np.zeros(len(psr_conditions))
+        psr_data = []
+
+        # check for presence of data and output files; if present, reuse.
+        matches_number = False
+        matches_shape = False
+        exists_data = os.path.isfile(data_files["data_psr"])
+        exists_output = os.path.isfile(data_files["output_psr"])
+        if exists_data and exists_output:
+            induction_lengths = np.genfromtxt(data_files["output_psr"], delimiter=",")
+            psr_data = np.genfromtxt(data_files["data_psr"], delimiter=",")
+            # need to check that saved data at least matches the number of cases
+            matches_number = induction_lengths.size == len(psr_conditions) and psr_data.shape[0] / 20 == len(psr_conditions)
+
+            # also check that expected data is right shape (e.g., in case number of species
+            # has changed if running a new model)
+            gas = ct.Solution(model, phase_name)
+            matches_shape = psr_data.shape[1] == 2 + gas.n_species
+
+        if matches_number and matches_shape:
+            logging.info("Reusing existing psr samples for the starting model.")
+        else:
+            logging.info("Running psr simulations for starting model.")
+            simulations = []
+            for idx, case in enumerate(psr_conditions):
+                simulations.append(simulation.Simulation_psr(idx, case, model, phase_name=phase_name, path=path))
+
+            jobs = tuple(simulations)
+            if num_threads == 1:
+                results = []
+                for job in jobs:
+                    results.append(simulation_worker_psr(job))
+            else:
+                pool = multiprocessing.Pool(processes=num_threads)
+                results = pool.map(simulation_worker_psr, jobs)
+                pool.close()
+                pool.join()
+
+            induction_lengths = np.zeros(len(psr_conditions))
+            psr_data = []
+            for idx, sim in enumerate(results):
+                induction_lengths[idx], data = sim.process_results()
+                psr_data += list(data)
+                sim.clean()
+            psr_data = np.array(psr_data)
+
+            np.savetxt(data_files["data_psr"], psr_data, fmt="%5s", delimiter=",")
+            np.savetxt(data_files["output_psr"], induction_lengths, fmt="%5s", delimiter=",")
 
     if flame_conditions:
         logging.info("Sampling laminar flame speed targets")
@@ -556,10 +652,9 @@ def sample(model, ignition_conditions, flame_conditions, znd_conditions, psr_con
         else:
             logging.info("Running flame simulations for starting model.")
             # print("Running flame simulations for starting model.")
-            stop_at_flame = False
             simulations = []
             for idx, case in enumerate(flame_conditions):
-                simulations.append([simulation.Simulation_fls(idx, case, model, phase_name=phase_name, path=path), stop_at_flame])
+                simulations.append(simulation.Simulation_fls(idx, case, model, phase_name=phase_name, path=path))
 
             jobs = tuple(simulations)
             if num_threads == 1:
@@ -611,10 +706,9 @@ def sample(model, ignition_conditions, flame_conditions, znd_conditions, psr_con
         else:
             logging.info("Running znd simulations for starting model.")
             # print("Running znd simulations for starting model.")
-            stop_at_znd = False
             simulations = []
             for idx, case in enumerate(znd_conditions):
-                simulations.append([simulation.Simulation_znd(idx, case, model, phase_name=phase_name, path=path), stop_at_znd])
+                simulations.append(simulation.Simulation_znd(idx, case, model, phase_name=phase_name, path=path))
 
             jobs = tuple(simulations)
             if num_threads == 1:
@@ -695,7 +789,9 @@ def parse_ignition_inputs(model, conditions, phase_name=""):
 
         reactants = case.get("reactants", [])
 
-        assert (bool(equiv_ratio or fuel or oxidizer) + bool(reactants)) == 1, pre + "should specify either equivalence-ratio/fuel/oxidizer or reactants."
+        assert (bool(equiv_ratio or fuel or oxidizer) + bool(reactants)) == 1, (
+            pre + "should specify either equivalence-ratio/fuel/oxidizer or reactants."
+        )
 
         if equiv_ratio or fuel or oxidizer:
             assert equiv_ratio > 0.0, pre + 'needs non-zero "equivalence-ratio"'
@@ -719,13 +815,15 @@ def parse_ignition_inputs(model, conditions, phase_name=""):
         assert composition_type in ["mole", "mass"], pre + 'composition-type must be "mole" or "mass"'
         assert not (composition_type == "mass" and equiv_ratio), pre + "composition-type: must be mole when specifying equivalence ratio"
 
-        inputs.append(InputIgnition(kind, temperature, pressure, end_time, max_steps, equiv_ratio, fuel, oxidizer, reactants, composition_type))
+        inputs.append(
+            InputIgnition(kind, temperature, pressure, end_time, max_steps, equiv_ratio, fuel, oxidizer, reactants, composition_type)
+        )
 
     return inputs
 
 
 def parse_psr_inputs(model, conditions, phase_name=""):
-    """Parses input for PSR simulations, raising an error on any errors.
+    """Parses input for PSR calculations, raising an error on any errors.
 
     Parameters
     ----------
@@ -742,7 +840,54 @@ def parse_psr_inputs(model, conditions, phase_name=""):
         List of validated objects with PSR input parameters
 
     """
-    return None
+    gas = ct.Solution(model, phase_name)
+
+    inputs = []
+    for idx, case in enumerate(conditions):
+        pre = f"PSR input {idx}: "
+
+        # check required keys
+        temperature = case.get("temperature", 0.0)
+        pressure = case.get("pressure", 0.0)
+
+        assert temperature > 0.0, pre + '"temperature" needs to be > 0'
+        assert pressure > 0.0, pre + '"pressure" needs to be a number > 0'
+
+        equiv_ratio = case.get("equivalence-ratio", 0.0)
+        fuel = case.get("fuel", [])
+        oxidizer = case.get("oxidizer", [])
+
+        reactants = case.get("reactants", [])
+
+        assert (bool(equiv_ratio or fuel or oxidizer) + bool(reactants)) == 1, (
+            pre + "should specify either equivalence-ratio/fuel/oxidizer or reactants."
+        )
+
+        if equiv_ratio or fuel or oxidizer:
+            assert equiv_ratio > 0.0, pre + 'needs non-zero "equivalence-ratio"'
+
+            assert fuel, pre + 'needs "fuel" with at least one entry'
+            for entry in fuel:
+                assert fuel[entry] > 0, pre + entry + " value needs to be a number > 0"
+                assert entry in gas.species_names, pre + "fuel species not in model: " + entry
+
+            assert oxidizer, pre + 'needs "oxidizer" with at least one entry'
+            for entry in oxidizer:
+                assert oxidizer[entry] > 0, pre + entry + " value needs to be a number > 0"
+                assert entry in gas.species_names, pre + "oxidizer species not in model: " + entry
+
+        if reactants:
+            for entry in reactants:
+                assert reactants[entry] > 0, pre + entry + " value needs to be a number > 0"
+                assert entry in gas.species_names, pre + "reactant not in model: " + entry
+
+        composition_type = case.get("composition-type", "mole")
+        assert composition_type in ["mole", "mass"], pre + 'composition-type must be "mole" or "mass"'
+        assert not (composition_type == "mass" and equiv_ratio), pre + "composition-type: must be mole when specifying equivalence ratio"
+
+        inputs.append(InputPSR(temperature, pressure, equiv_ratio, fuel, oxidizer, reactants, composition_type))
+
+    return inputs
 
 
 def parse_flame_inputs(model, conditions, phase_name=""):
@@ -782,7 +927,9 @@ def parse_flame_inputs(model, conditions, phase_name=""):
 
         reactants = case.get("reactants", [])
 
-        assert (bool(equiv_ratio or fuel or oxidizer) + bool(reactants)) == 1, pre + "should specify either equivalence-ratio/fuel/oxidizer or reactants."
+        assert (bool(equiv_ratio or fuel or oxidizer) + bool(reactants)) == 1, (
+            pre + "should specify either equivalence-ratio/fuel/oxidizer or reactants."
+        )
 
         if equiv_ratio or fuel or oxidizer:
             assert equiv_ratio > 0.0, pre + 'needs non-zero "equivalence-ratio"'
@@ -848,7 +995,9 @@ def parse_znd_inputs(model, conditions, phase_name=""):
 
         reactants = case.get("reactants", [])
 
-        assert (bool(equiv_ratio or fuel or oxidizer) + bool(reactants)) == 1, pre + "should specify either equivalence-ratio/fuel/oxidizer or reactants."
+        assert (bool(equiv_ratio or fuel or oxidizer) + bool(reactants)) == 1, (
+            pre + "should specify either equivalence-ratio/fuel/oxidizer or reactants."
+        )
 
         if equiv_ratio or fuel or oxidizer:
             assert equiv_ratio > 0.0, pre + 'needs non-zero "equivalence-ratio"'

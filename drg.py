@@ -112,20 +112,20 @@ def trim_drg(matrix, species_names, species_targets, threshold):
 
 
 def reduce_drg(
-        model_file,
-        species_targets,
-        species_safe,
-        threshold,
-        matrices,
-        ignition_conditions,
-        flame_conditions,
-        znd_conditions,
-        sampled_metrics,
-        phase_name="",
-        previous_model=None,
-        threshold_upper=None,
-        num_threads=1,
-        path="",
+    model_file,
+    species_targets,
+    species_safe,
+    threshold,
+    matrices,
+    ignition_conditions,
+    flame_conditions,
+    znd_conditions,
+    sampled_metrics,
+    phase_name="",
+    previous_model=None,
+    threshold_upper=None,
+    num_threads=1,
+    path="",
 ):
     """Given a threshold and DRG matrix, reduce the model and determine the error.
 
@@ -184,7 +184,15 @@ def reduce_drg(
     reduced_model = trim(model_file, species_removed, f"reduced_{model_file}", phase_name=phase_name)
     reduced_model_filename = soln2cti.write(reduced_model, f"reduced_{reduced_model.n_species}.cti", path=path)
 
-    reduced_model_metrics = sample_metrics(reduced_model_filename, ignition_conditions, flame_conditions, znd_conditions, phase_name=phase_name, num_threads=num_threads, path=path)
+    reduced_model_metrics = sample_metrics(
+        reduced_model_filename,
+        ignition_conditions,
+        flame_conditions,
+        znd_conditions,
+        phase_name=phase_name,
+        num_threads=num_threads,
+        path=path,
+    )
     error = calculate_error(sampled_metrics, reduced_model_metrics)
 
     # If desired, now identify limbo species for future sensitivity analysis
@@ -197,18 +205,18 @@ def reduce_drg(
 
 
 def run_drg(
-        model_file,
-        ignition_conditions,
-        psr_conditions,
-        flame_conditions,
-        znd_conditions,
-        error_limit,
-        species_targets,
-        species_safe,
-        phase_name="",
-        threshold_upper=None,
-        num_threads=1,
-        path="",
+    model_file,
+    ignition_conditions,
+    psr_conditions,
+    flame_conditions,
+    znd_conditions,
+    error_limit,
+    species_targets,
+    species_safe,
+    phase_name="",
+    threshold_upper=None,
+    num_threads=1,
+    path="",
 ):
     """Main function for running DRG reduction.
 
@@ -274,7 +282,16 @@ def run_drg(
     # first, sample thermochemical data and generate metrics for measuring error
     # (e.g, ignition delays). Also produce adjacency matrices for graphs, which
     # will be used to produce graphs for any threshold value.
-    sampled_metrics, sampled_data = sample(model_file, ignition_conditions, flame_conditions, znd_conditions, phase_name=phase_name, num_threads=num_threads, path=path)
+    sampled_metrics, sampled_data = sample(
+        model_file,
+        ignition_conditions,
+        psr_conditions,
+        flame_conditions,
+        znd_conditions,
+        phase_name=phase_name,
+        num_threads=num_threads,
+        path=path,
+    )
 
     matrices = []
     for state in sampled_data:
@@ -292,7 +309,7 @@ def run_drg(
     previous_model = ReducedModel(model=solution, filename=model_file, error=0.0)
 
     first = True
-    error_current = 0.0
+    # error_current = 0.0
     threshold = 0.01
     threshold_increment = 0.01
 
@@ -328,7 +345,9 @@ def run_drg(
         # if previous_model.model.n_species != reduced_model.model.n_species:
         #     os.remove(reduced_model.filename)
 
-        previous_model = ReducedModel(model=reduced_model.model, filename=reduced_model.filename, error=reduced_model.error, limbo_species=reduced_model.limbo_species)
+        previous_model = ReducedModel(
+            model=reduced_model.model, filename=reduced_model.filename, error=reduced_model.error, limbo_species=reduced_model.limbo_species
+        )
 
         if error_current > error_limit:
             if first:
