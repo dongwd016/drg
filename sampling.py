@@ -890,10 +890,9 @@ def get_plot_data(model, ignition_conditions, psr_conditions, flame_conditions, 
             pool.close()
             pool.join()
 
-        induction_lengths = np.zeros(len(znd_conditions))
         znd_data = []
         for idx, sim in enumerate(results):
-            induction_lengths[idx], data = sim.process_results()
+            data = sim.get_plot_data()
             znd_data += list(data)
             sim.clean()
         znd_data = np.array(znd_data)

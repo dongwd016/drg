@@ -15,6 +15,7 @@ import cantera as ct
 from sdtoolbox.postshock import CJspeed, PostShock_fr
 from sdtoolbox.znd import zndsolve
 from sdtoolbox.utilities import CJspeed_plot, znd_plot, znd_fileout
+import matlab.engine
 
 ct.suppress_thermo_warnings()
 
@@ -245,13 +246,9 @@ class Simulation_znd(object):
             else:
                 self.gas_pre.TPY = (self.properties.temperature, self.properties.pressure * ct.one_atm, self.properties.reactants)
 
-        self.cj_speed, _, _ = CJspeed(
-            self.properties.pressure * ct.one_atm, self.properties.temperature, self.gas_pre.X, self.model, fullOutput=True
-        )
+        self.cj_speed, _, _ = CJspeed(self.properties.pressure * ct.one_atm, self.properties.temperature, self.gas_pre.X, self.model, fullOutput=True)
 
-        self.gas_post = PostShock_fr(
-            self.cj_speed, self.properties.pressure * ct.one_atm, self.properties.temperature, self.gas_pre.X, self.model
-        )
+        self.gas_post = PostShock_fr(self.cj_speed, self.properties.pressure * ct.one_atm, self.properties.temperature, self.gas_pre.X, self.model)
 
         self.induction_length = 0.0
 
@@ -280,16 +277,36 @@ class Simulation_znd(object):
             print("Skipped existing case ", self.idx)
             return
 
-        znd_out = zndsolve(self.gas_post, self.gas_pre, self.cj_speed, t_end=1e-5, advanced_output=True)
+        # znd_out = zndsolve(self.gas_post, self.gas_pre, self.cj_speed, t_end=1e-5, advanced_output=True)
+        #
+        # self.induction_length = znd_out["ind_len_ZND"]
+        #
+        # solution_dict = dict()
+        # solution_dict["distance"] = znd_out["distance"]
+        # solution_dict["temperatures"] = znd_out["T"]
+        # solution_dict["pressures"] = znd_out["P"]
+        # solution_dict["mass_fractions"] = znd_out["species"]
+        # solution_dict["induction_length"] = znd_out["ind_len_ZND"]
 
-        self.induction_length = znd_out["ind_len_ZND"]
-
+        eng = matlab.engine.start_matlab()
+        mech_file = self.model
+        # temp, pres = self.properties.temperature, self.properties.pressure * ct.one_atm
+        temp, pres = self.gas_pre.TP
+        spec = ", ".join(["{}:{}".format(k, v) for k, v in self.gas_pre.mole_fraction_dict().items()])
+        induction_length = eng.znd_solve_matlab(mech_file, temp, pres, spec, True)
         solution_dict = dict()
-        solution_dict["distance"] = znd_out["distance"]
-        solution_dict["temperatures"] = znd_out["T"]
-        solution_dict["pressures"] = znd_out["P"]
-        solution_dict["mass_fractions"] = znd_out["species"]
-        solution_dict["induction_length"] = znd_out["ind_len_ZND"]
+        solution_dict["distance"] = np.loadtxt("distance.txt")
+        solution_dict["thermicity"] = np.loadtxt("thermicity.txt")
+        solution_dict["temperatures"] = np.loadtxt("T.txt")
+        solution_dict["pressures"] = np.loadtxt("P.txt")
+        solution_dict["mass_fractions"] = np.loadtxt("species.txt")
+        solution_dict["induction_length"] = induction_length
+        os.remove("distance.txt")
+        os.remove("T.txt")
+        os.remove("P.txt")
+        os.remove("species.txt")
+        eng.quit()
+
         json.dump(solution_dict, open(self.save_file, "w"), default=json_convert)
 
         return self.induction_length
@@ -297,8 +314,16 @@ class Simulation_znd(object):
     def calculate_inductionlength(self):
         """Run simulation case set up ``setup_case``, just for ignition delay."""
 
-        znd_out = zndsolve(self.gas_post, self.gas_pre, self.cj_speed, t_end=1e-5, advanced_output=True)
-        self.induction_length = znd_out["ind_len_ZND"]
+        # znd_out = zndsolve(self.gas_post, self.gas_pre, self.cj_speed, t_end=1e-5, advanced_output=True)
+        # self.induction_length = znd_out["ind_len_ZND"]
+
+        eng = matlab.engine.start_matlab()
+        mech_file = self.model
+        temp, pres = self.gas_pre.TP
+        spec = ", ".join(["{}:{}".format(k, v) for k, v in self.gas_pre.mole_fraction_dict().items()])
+        self.induction_length = eng.znd_solve_matlab(mech_file, temp, pres, spec, False)
+        eng.quit()
+
         return self.induction_length
 
     def process_results(self):
@@ -321,13 +346,39 @@ class Simulation_znd(object):
         distance = saved_dict["distance"]
         temperatures = saved_dict["temperatures"]
         pressures = saved_dict["pressures"]
-        mass_fractions = saved_dict["mass_fractions"].T
+        mass_fractions = saved_dict["mass_fractions"]
         induction_length = saved_dict["induction_length"]
 
         sampled_x = np.linspace(0, induction_length, 22)[1:-1]
         ind_list = [np.argmin(np.abs(distance - x)) for x in sampled_x]
         sampled_data = np.hstack([temperatures[ind_list].reshape(-1, 1), pressures[ind_list].reshape(-1, 1), mass_fractions[ind_list, :]])
         return induction_length, sampled_data
+
+    def get_plot_data(self):
+        """Process integration results to sample data
+
+        Parameters
+        ----------
+        skip_data : bool
+            Flag to skip sampling thermochemical data
+
+        Returns
+        -------
+        tuple of float, numpy.ndarray or float
+            Ignition delay, or ignition delay and sampled data
+
+        """
+        # Load saved integration results
+        saved_dict = json.load(open(self.save_file, "r"), object_hook=json_deconvert)
+
+        distance = saved_dict["distance"]
+        thermicity = saved_dict["thermicity"]
+        temperatures = saved_dict["temperatures"]
+        pressures = saved_dict["pressures"]
+        mass_fractions = saved_dict["mass_fractions"]
+
+        sampled_data = np.hstack([distance.reshape(-1, 1), thermicity.reshape(-1, 1), temperatures.reshape(-1, 1), pressures.reshape(-1, 1), mass_fractions])
+        return sampled_data
 
     def clean(self):
         """Delete file with full integration data."""
@@ -438,7 +489,7 @@ class Simulation_psr(object):
         pres = self.properties.pressure
         psi = initial_psi.copy()
 
-        for cur_temp in temp_mid:
+        def get_cur_state(cur_temp, psi, states, record=True):
             h_arr = np.array([gas.species(i).thermo.h(cur_temp) for i in range(gas.n_species)]) / gas.molecular_weights
             gas.TP = cur_temp, pres * ct.one_atm
             while True:
@@ -465,17 +516,30 @@ class Simulation_psr(object):
                 J = np.zeros((gas.n_species + 1, gas.n_species + 1))
                 J[: gas.n_species, : gas.n_species] = gas.molecular_weights.reshape(-1, 1) * V * wy - m / cur_tau * np.eye(gas.n_species)
                 J[-1, :-1] = h_arr
-                J[:-1, -1] = -(gas0.Y - gas.Y) * m / cur_tau ** 2
+                J[:-1, -1] = -(gas0.Y - gas.Y) * m / cur_tau**2
 
                 F = np.zeros(gas.n_species + 1)
                 F[:-1] = gas.net_production_rates * gas.molecular_weights * V + m / cur_tau * (gas0.Y - cur_Y)
                 F[-1] = gas.enthalpy_mass - h0
-                psi_new = psi - 0.3 * np.linalg.solve(J, F)
+                try:
+                    psi_new = psi - 0.3 * np.linalg.solve(J, F)
+                except:
+                    Y = states.Y[-1, :].copy()
+                    tau = states.tres[-1]
+                    psi = np.concatenate([Y, [tau]])
+                    psi, states = get_cur_state((cur_temp + states.T[-1]) / 2, psi, states, record=False)
+                    psi, states = get_cur_state(cur_temp, psi, states)
+                    return psi, states
                 err = np.abs((psi_new[-1] - psi[-1]) / psi[-1])
                 psi = psi_new.copy()
-                if err < 1e-3:
-                    states.append(TPY=(cur_temp, pres * ct.one_atm, psi[:-1]), tres=psi[-1])
+                if err < 1e-5:
+                    if record:
+                        states.append(TPY=(cur_temp, pres * ct.one_atm, psi[:-1]), tres=psi[-1])
                     break
+            return psi, states
+
+        for cur_temp in temp_mid:
+            psi, states = get_cur_state(cur_temp, psi, states)
         return states
 
     def run_case(self, restart=False, num=10):
@@ -562,7 +626,7 @@ class Simulation_psr(object):
         # Load saved integration results
         saved_dict = json.load(open(self.save_file, "r"), object_hook=json_deconvert)
 
-        residence_time = saved_dict['residence_time']
+        residence_time = saved_dict["residence_time"]
         temperatures = saved_dict["temperatures"]
         pressures = saved_dict["pressures"]
         mass_fractions = saved_dict["mass_fractions"]
