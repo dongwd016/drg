@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 import cantera as ct
 
+
 class ReducedModel(NamedTuple):
     """Represents reduced model and associated metadata
     """
@@ -11,7 +12,7 @@ class ReducedModel(NamedTuple):
     filename: str = ''
     error: float = 0.0
     limbo_species: list = []
-    
+
 
 def trim(initial_model_file, exclusion_list, new_model_file, phase_name=''):
     """Function to eliminate species and corresponding reactions from model
@@ -44,9 +45,9 @@ def trim(initial_model_file, exclusion_list, new_model_file, phase_name=''):
     for reaction in solution.reactions():
         # remove reactions with an explicit third body that has been removed
         if hasattr(reaction, 'efficiencies') and not getattr(reaction, 'default_efficiency', 1.0):
-            if (len(reaction.efficiencies) == 1 and 
-                list(reaction.efficiencies.keys())[0] in exclusion_list
-                ):
+            if (len(reaction.efficiencies) == 1 and
+                    list(reaction.efficiencies.keys())[0] in exclusion_list
+            ):
                 continue
 
         reaction_species = list(reaction.products.keys()) + list(reaction.reactants.keys())
@@ -54,16 +55,16 @@ def trim(initial_model_file, exclusion_list, new_model_file, phase_name=''):
             # remove any eliminated species from third-body efficiencies
             if hasattr(reaction, 'efficiencies'):
                 reaction.efficiencies = {
-                    sp:val for sp, val in reaction.efficiencies.items() 
+                    sp: val for sp, val in reaction.efficiencies.items()
                     if sp in final_species_names
-                    }
+                }
             final_reactions.append(reaction)
 
     # Create new solution based on remaining species and reactions
     new_solution = ct.Solution(
         species=final_species, reactions=final_reactions,
         thermo='IdealGas', kinetics='GasKinetics'
-        )
+    )
     new_solution.TP = solution.TP
     if phase_name:
         new_solution.name = phase_name
